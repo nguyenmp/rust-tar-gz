@@ -1,3 +1,9 @@
+#[macro_use]
+extern crate serde_derive;
+
+extern crate serde;
+extern crate serde_json;
+
 use std::fs::File;
 
 fn main() {
@@ -8,7 +14,7 @@ fn main() {
 }
 
 pub mod huffman {
-	#[derive(Debug, Eq, PartialEq)]
+	#[derive(Eq, PartialEq, Serialize)]
 	pub enum Huffman<T : Copy + Eq> {
 		Branch{
 			zero: Box<Huffman<T>>,
@@ -18,7 +24,14 @@ pub mod huffman {
 		DeadEnd,
 	}
 
-	impl <T : Copy + Eq> Huffman<T> {
+	impl <T: Copy + Eq + serde::ser::Serialize> std::fmt::Debug for Huffman<T> {
+	    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+	        write!(f, "{}", serde_json::to_string(&self).unwrap())
+	    }
+	}
+
+
+	impl <T : Copy + Eq + Ord> Huffman<T> {
 		pub fn new(alphabet: &Vec<T>, bit_lengths: &Vec<usize>) -> Huffman<T> {
 			assert_eq!(alphabet.len(), bit_lengths.len());
 
@@ -27,7 +40,7 @@ pub mod huffman {
 			let max = get_max_code_length(bit_lengths);
 			let starting_values = determine_starting_values(&counts_by_length, max);
 			println!("Starting Values: {:?}", starting_values);
-			let assigned_values = assign_values(bit_lengths, &starting_values, max);
+			let assigned_values = assign_values(alphabet, bit_lengths, &starting_values, max);
 			println!("Assigned Values: {:?}", assigned_values);
 			build_tree(alphabet, &assigned_values, bit_lengths)
 		}
@@ -72,23 +85,46 @@ pub mod huffman {
 		starting_values
 	}
 
-	fn assign_values(bit_lengths: &Vec<usize>, starting_values: &Vec<usize>, max_length: usize) -> Vec<usize> {
+	fn assign_values<T : Copy + Ord>(alphabet: &Vec<T>, bit_lengths: &Vec<usize>, starting_values: &Vec<usize>, max_length: usize) -> Vec<usize> {
 		println!("Assigning real values given these lengths: {:?} and starting_values: {:?}", bit_lengths, starting_values);
 		let mut values = vec![0; bit_lengths.len()];
+		let index_order = get_index_ordering(alphabet);
+
 
 		// We need max_length + 1 because we're using that value as an index
 		// into an array.  Otherwise, we'd never actually look at max_length
 		// since ranges are not inclusive on that end
 		for current_length in 1..(max_length + 1) {
 			let mut starting_value = starting_values[current_length];
-			for index in 0..bit_lengths.len() {
-				if bit_lengths[index] == current_length {
-					values[index] = starting_value;
+			for index in &index_order {
+				if bit_lengths[*index] == current_length {
+					values[*index] = starting_value;
 					starting_value += 1;
 				}
 			}
 		}
 		values
+	}
+
+	/// This inverts the code length huffman tree's alphabet
+	/// Huffman trees work by assigning value to the lowest lexical
+	/// value first, but the alphabet is not in lexical order
+	/// So we need to figure out how to invert the alphabet to get
+	/// the order of indexes to walk through
+	fn get_index_ordering<T : Ord + Copy>(alphabet: &Vec<T>) -> Vec<usize> {
+		// alphabet is givne_index -> value
+		// sorted is walking_index -> value
+		// result is walking_index -> given_index
+		let mut sorted = alphabet.clone();
+		sorted.sort_unstable();
+		let mut result = vec![0; alphabet.len()];
+		for given_index in 0..alphabet.len() {
+			let value = alphabet[given_index];
+			let walking_index = sorted.binary_search(&value).expect("Alphabet inversion resulted in not finding a value");
+			result[walking_index] = given_index;
+		}
+		println!("Walking order: {:?}", result);
+		result
 	}
 
 	fn build_tree<T : Copy + Eq>(alphabet: &Vec<T>, values: &Vec<usize>, lengths: &Vec<usize>) -> Huffman<T> {
@@ -192,11 +228,12 @@ pub mod huffman {
 
 		#[test]
 		fn test_assign_values() {
+			let alphabet = vec!['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 			let bit_lengths = vec![3, 3, 3, 3, 3, 2, 4, 4];
 			let counts_by_code_length = count_by_code_length(&bit_lengths);
 			let max = get_max_code_length(&bit_lengths);
 			let starting_values = determine_starting_values(&counts_by_code_length, max);
-			let assigned_values = assign_values(&bit_lengths, &starting_values, max);
+			let assigned_values = assign_values(&alphabet, &bit_lengths, &starting_values, max);
 			assert_eq!(assigned_values, vec![0b010, 0b011, 0b100, 0b101, 0b110, 0b00, 0b1110, 0b1111]);
 		}
 
@@ -325,6 +362,7 @@ mod deflate {
 		// The encoding should generate exactly `count` entries into
 		// the list of code lengths
 		assert_eq!(lengths.len(), count);
+		println!("Lengths by alphabet: {:?}", lengths);
 		lengths
 	}
 
