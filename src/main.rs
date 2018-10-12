@@ -1,7 +1,7 @@
 use std::fs::File;
 
 fn main() {
-	let filename = "/Users/livingon/Downloads/sysdiagnose_2018.10.03_00-15-12-0700_Mac_OS_X_BXPCFACP0-1_18A326g.tar.gz";
+	let filename = "/Users/livingon/untitled/untitled/Cargo.tar.gz";
 	let mut file = File::open(filename).expect("file not found");
 	gzip::handle_headers(&mut file);
 	deflate::process(&mut file);
@@ -15,6 +15,7 @@ pub mod huffman {
 			one: Box<Huffman<T>>,
 		},
 		Leaf(T),
+		DeadEnd,
 	}
 
 	impl <T : Copy + Eq> Huffman<T> {
@@ -57,22 +58,28 @@ pub mod huffman {
 
 	fn determine_starting_values(count_by_code_length: &Vec<usize>, max_code_length: usize) -> Vec<usize> {
 		// We always start with an array of 0 because we start counting at length=1
-		let mut starting_values = vec![0; max_code_length + 1];
+		let mut starting_values = Vec::new();
+		starting_values.push(0);
+
 		for length in 1..count_by_code_length.len() {
 			let last_value = starting_values[length - 1];
-			let last_count = count_by_code_length[length - 1];
-			starting_values[length] = (last_value + last_count) << 1
+			let last_count = if length == 1 { 0 } else { count_by_code_length[length - 1] };
+			starting_values.push((last_value + last_count) << 1);
+			println!(
+				"Previous Value: {}, Previous Count: {}, New Value: {}",
+				last_value, last_count, starting_values.last().unwrap());
 		}
 		starting_values
 	}
 
 	fn assign_values(bit_lengths: &Vec<usize>, starting_values: &Vec<usize>, max_length: usize) -> Vec<usize> {
+		println!("Assigning real values given these lengths: {:?} and starting_values: {:?}", bit_lengths, starting_values);
 		let mut values = vec![0; bit_lengths.len()];
 
 		// We need max_length + 1 because we're using that value as an index
 		// into an array.  Otherwise, we'd never actually look at max_length
 		// since ranges are not inclusive on that end
-		for current_length in 0..(max_length + 1) {
+		for current_length in 1..(max_length + 1) {
 			let mut starting_value = starting_values[current_length];
 			for index in 0..bit_lengths.len() {
 				if bit_lengths[index] == current_length {
@@ -93,6 +100,7 @@ pub mod huffman {
 				indexes.push(index)
 			}
 		}
+		println!("Only considering {:?}", indexes);
 		_build_tree(alphabet, values, depth, lengths, &indexes)
 	}
 
@@ -100,7 +108,11 @@ pub mod huffman {
 		// If we only have one index to consider, then we are at the leaf
 		// and the value of that leaf is the alphabet at that index
 		if indexes.len() == 1 {
+			println!("Leafing this alone!");
 			return Huffman::Leaf(alphabet[indexes[0].clone()])
+		} else if indexes.len() == 0 {
+			println!("This is a dead end, and that's okay");
+			return Huffman::DeadEnd
 		}
 
 		// Otherwise, we need to loop through our options and
@@ -115,8 +127,8 @@ pub mod huffman {
 
 			// If we're at depth 0, and we're looking at a value of length 3
 			// Then the bit we are looking at is the 2 in [2, 1, 0]
-			println!("Value {:08b}, length {}, depth {}", value, length, depth);
 			let bit = (value >> (length - 1 - depth)) & 0b1;
+			println!("Index {:?}, Value {:06b}, length {}, depth {}, bit {:01b}", *index, value, length, depth, bit);
 			if bit == 1 {
 				ones.push(*index);
 			} else if bit == 0 {
@@ -125,6 +137,8 @@ pub mod huffman {
 				panic!("bit was neither one nor zero");
 			}
 		}
+
+		println!("Ones: {:?}, Zeros: {:?}", ones, zeros);
 
 		Huffman::Branch {
 			zero: Box::new(_build_tree(alphabet, values, depth + 1, lengths, &zeros)),
@@ -221,8 +235,8 @@ mod deflate {
 	}
 
 	fn handle_dynamic(input_stream: &mut BitStream) {
-		let hlit = input_stream.next_bits(5) + 257;
-		let hdist = input_stream.next_bits(5) + 1;
+		let hlit = input_stream.next_bits(5) as usize + 257;
+		let hdist = input_stream.next_bits(5) as usize + 1;
 		let hclen = input_stream.next_bits(4) as usize + 4;
 		println!("hlit : {}", hlit);
 		println!("hdist : {}", hdist);
@@ -230,19 +244,22 @@ mod deflate {
 
 		// Read this first, this is next in the format and contains the code length
 		// compression tree to decode the literal/length huffman and the distance huffman
-		let _code_length_huffman = read_code_length_huffman(hclen, input_stream);
+		let code_length_huffman = read_code_length_huffman(hclen, input_stream);
 
-		// TODO: HLIT
-
-		// TODO: HDIST
+		// Use code_length_huffman to build the literal_length and distance huffmans
+		let _literal_length_huffman = read_literal_length_huffman(hlit, input_stream, &code_length_huffman);
+		let _distance_huffman = read_distance_huffman(hdist, input_stream, &code_length_huffman);
 
 		// TODO: Actual compressed data
+		// Using literal/length and distance huffman, we can now decode the compressed data
 
 		// TODO: Process end of block
 		unimplemented!();
 	}
 
-	type CodeLengthHuffman = super::huffman::Huffman<u8>;
+	type CodeLengthHuffman = super::huffman::Huffman<usize>;
+	type LiteralLengthHuffman = super::huffman::Huffman<usize>;
+	type DistanceHuffman = super::huffman::Huffman<usize>;
 	fn read_code_length_huffman(length: usize, input_stream: &mut BitStream) -> CodeLengthHuffman {
 		// Read the hlit + 4 code lengths (3 bits each)
 		let alphabet = vec![16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
@@ -255,8 +272,75 @@ mod deflate {
 		println!("Alphabet : {:?}", alphabet);
 		println!("Bit Lengths : {:?}", bit_lengths);
 		let h = super::huffman::Huffman::new(&alphabet, &bit_lengths);
-		println!("{:?}", h);
-		unimplemented!()
+		println!("Code Length Huffman = {:?}", h);
+		h
+	}
+
+	fn read_literal_length_huffman(length: usize, input_stream: &mut BitStream, code_length_huffman: &CodeLengthHuffman) -> LiteralLengthHuffman {
+		// Includes 0 and 285, but not 286
+		let alphabet = (0..length).collect();
+		let lengths = read_code_lengths(length, input_stream, code_length_huffman);
+		let result = super::huffman::Huffman::new(&alphabet, &lengths);
+		println!("Literal/Length Huffman = {:?}", result);
+		result
+	}
+
+	fn read_distance_huffman(length: usize, input_stream: &mut BitStream, code_length_huffman: &CodeLengthHuffman) -> DistanceHuffman {
+		let alphabet = (0..length).collect();
+		let lengths = read_code_lengths(length, input_stream, code_length_huffman);
+		let result = super::huffman::Huffman::new(&alphabet, &lengths);
+		println!("Distance Huffman = {:?}", result);
+		result
+	}
+
+	fn read_code_lengths(count: usize, input_stream: &mut BitStream, code_length_huffman: &CodeLengthHuffman) -> Vec<usize> {
+		let mut lengths = Vec::new();
+		while lengths.len() < count {
+			let length = get_next_huffman_encoded_value(code_length_huffman, input_stream);
+			println!("Found this length: {}", length);
+
+			// Literal value
+			if length <= 15 {
+				lengths.push(length);
+				continue
+			}
+			
+			// Otherwise, it's a repeater of a previous value or zero
+			let (repeat_value, count) = match length {
+				16 => {
+					let value = (*lengths.last().expect("Cannot repeat at start of stream")).clone();
+					let count = input_stream.next_bits(2) + 3;
+					(value, count)
+				},
+				17 => (0, input_stream.next_bits(3) + 3),
+				18 => (0, input_stream.next_bits(7) + 11),
+				_ => panic!("Unsupported code length {}", length)
+			};
+			for _ in 0..count {
+				lengths.push(repeat_value)
+			}
+		}
+
+		// By the end, we should NOT have more or less than we want
+		// The encoding should generate exactly `count` entries into
+		// the list of code lengths
+		assert_eq!(lengths.len(), count);
+		lengths
+	}
+
+	fn get_next_huffman_encoded_value<T : Copy + Eq>(huffman: &super::huffman::Huffman<T>, input_stream: &mut BitStream) -> T {
+		match huffman {
+			super::huffman::Huffman::Branch{zero, one} => {
+				let bit = input_stream.next_bit();
+				if bit == 0b0 {
+					get_next_huffman_encoded_value(zero, input_stream)
+				} else {
+					get_next_huffman_encoded_value(one, input_stream)
+				}
+			},
+			super::huffman::Huffman::Leaf(value) => *value,
+			super::huffman::Huffman::DeadEnd => panic!("Reached dead end!"),
+		}
 	}
 
 	struct BitStream<'a> {
