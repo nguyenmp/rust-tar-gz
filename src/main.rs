@@ -7,7 +7,7 @@ extern crate serde_json;
 use std::fs::File;
 
 fn main() {
-	let filename = "/Users/livingon/untitled/untitled/Cargo.tar.gz";
+	let filename = "/Users/livingon/Downloads/sysdiagnose_2018.10.03_00-15-12-0700_Mac_OS_X_BXPCFACP0-1_18A326g.tar.gz";
 	let mut file = File::open(filename).expect("file not found");
 	gzip::handle_headers(&mut file);
 	deflate::process(&mut file);
@@ -78,9 +78,7 @@ pub mod huffman {
 			let last_value = starting_values[length - 1];
 			let last_count = if length == 1 { 0 } else { count_by_code_length[length - 1] };
 			starting_values.push((last_value + last_count) << 1);
-			println!(
-				"Previous Value: {}, Previous Count: {}, New Value: {}",
-				last_value, last_count, starting_values.last().unwrap());
+			println!("Previous Value: {}, Previous Count: {}, New Value: {}", last_value, last_count, starting_values.last().unwrap());
 		}
 		starting_values
 	}
@@ -246,32 +244,79 @@ pub mod huffman {
 	}
 }
 
+
 mod deflate {
 	use std::io::Read;
+
+	struct BufferedWriter {
+		bytes_written: usize,
+		buffer: Box<[u8]>,
+		cursor: usize,
+	}
+
+	impl BufferedWriter {
+		fn new() -> BufferedWriter {
+			BufferedWriter {
+				bytes_written: 0,
+				buffer: Box::new([0; 32768]),
+				cursor: 0,
+			}
+		}
+
+		fn write(self: &mut BufferedWriter, byte: u8) {
+			println!("Emitting byte: {}", byte as char);
+			self.buffer[self.cursor] = byte;
+			self.bytes_written += 1;
+			self.cursor = (self.cursor + 1) % self.buffer.len();
+		}
+
+		fn repeat(self: &mut BufferedWriter, distance: usize, count: usize) {
+			println!("Repeating -{} for {} times", distance, count);
+			assert!(distance <= self.buffer.len());
+			assert!(distance <= self.bytes_written);
+			for _ in 0..count {
+				// This is expected to be `cursor - distance` but because we're
+				// using a circular buffer, we need to add `capacity` and mod by
+				// `capacity` to ensure a positive index when we wrap around
+				let capacity = self.buffer.len();
+				let index = (capacity + self.cursor - distance) % capacity;
+				let byte = self.buffer[index];
+				self.write(byte);
+			}
+		}
+	}
 
 	const BTYPE_DYNAMIC : u8 = 0b10;
 
 	pub fn process(reader: &mut Read) {
 		let mut bit_stream = BitStream::from_read(reader);
-		handle_block(&mut bit_stream);
+		let mut writer = BufferedWriter::new();
+
+		loop {
+			let is_final_block = handle_block(&mut bit_stream, &mut writer);
+			if is_final_block {
+				println!("Final block has been handled, terminating DEFLATE stream");
+				break
+			}
+		}
 	}
 
-	fn handle_block<'a>(input_stream: &'a mut BitStream<'a>) {
+	fn handle_block(input_stream: &mut BitStream, writer: &mut BufferedWriter) -> bool {
 		// Is this the final block?
 		let b_final = input_stream.next_bit();
 		println!("b_final: {}", b_final);
-		assert_eq!(b_final, 0b00000001);
 
 		// Is what type of block is this?
 		let b_type = input_stream.next_bits(2) as u8;
 		println!("b_type : {:02b}", b_type);
 		match b_type {
-			BTYPE_DYNAMIC => handle_dynamic(input_stream),
+			BTYPE_DYNAMIC => handle_dynamic(input_stream, writer),
 			_ => panic!("Unhandled block type: {:02b}", b_type),
 		}
+		b_final == 0b1
 	}
 
-	fn handle_dynamic(input_stream: &mut BitStream) {
+	fn handle_dynamic(input_stream: &mut BitStream, writer: &mut BufferedWriter) {
 		let hlit = input_stream.next_bits(5) as usize + 257;
 		let hdist = input_stream.next_bits(5) as usize + 1;
 		let hclen = input_stream.next_bits(4) as usize + 4;
@@ -284,14 +329,90 @@ mod deflate {
 		let code_length_huffman = read_code_length_huffman(hclen, input_stream);
 
 		// Use code_length_huffman to build the literal_length and distance huffmans
-		let _literal_length_huffman = read_literal_length_huffman(hlit, input_stream, &code_length_huffman);
-		let _distance_huffman = read_distance_huffman(hdist, input_stream, &code_length_huffman);
+		let literal_length_huffman = read_literal_length_huffman(hlit, input_stream, &code_length_huffman);
+		let distance_huffman = read_distance_huffman(hdist, input_stream, &code_length_huffman);
 
-		// TODO: Actual compressed data
-		// Using literal/length and distance huffman, we can now decode the compressed data
+		// Actual decompression of data
+		loop {
+			let value = get_next_huffman_encoded_value(&literal_length_huffman, input_stream);
+			println!("Found value: {}", value);
+			if value < 256 {
+				// This is a literal byte to emit to the output stream
+				// We know it's a byte because of the check above and
+				// it's defined that way by the standard
+				writer.write(value as u8);
+			} else if value == 256 {
+				println!("End of block encountered");
+				break
+			} else if value <= 285 {
+				// The value is between [257, 285] inclusive on both ends
+				// This means it's a back reference so we have to copy
+				// from the buffer of written bytes some distance away
+				// and for some amount of repetition
 
-		// TODO: Process end of block
-		unimplemented!();
+				let repeat_length = read_repeat_length(value, input_stream);
+				let distance = read_repeat_distance(&distance_huffman, input_stream);
+				writer.repeat(distance as usize, repeat_length);
+			} else {
+				panic!("Unsupported value: {}", value);
+			}
+		}
+	}
+
+	fn read_repeat_distance(distance_huffman: &DistanceHuffman, input_stream: &mut BitStream) -> usize {
+		// A code ends up mapping to some base distance plus some
+		// extra bits to read to add to that base distance
+		let code = get_next_huffman_encoded_value(&distance_huffman, input_stream);
+		println!("Modulo: {}", code % 2);
+		let base_distance = match code {
+			0 ... 3 => {
+				code as u32 + 1
+			},
+			_ if code % 2 == 0 => {
+				println!("Even code");
+				2u32.pow(code as u32 / 2) + 1
+			},
+			_ if code % 2 == 1 => {
+				println!("Odd code");
+				println!("{}", 2u32.pow(code as u32 / 2));
+				println!("{}", 2u32.pow(code as u32 / 2 - 1));
+				println!("{}", 2u32.pow(code as u32 / 2) + 2u32.pow(code as u32 / 2 - 1) + 1);
+				2u32.pow(code as u32 / 2) + 2u32.pow(code as u32 / 2 - 1) + 1
+			},
+			_ => panic!("Logic error handling base distance"),
+		};
+		let num_distance_extra_bits = match code {
+			0 ... 3 => 0,
+			4 ... 29 => (code / 2) - 1,
+			_ => panic!("Distance is undefined for: {}", code),
+		};
+		let distance_offset = input_stream.next_bits(num_distance_extra_bits) as u32;
+		println!("Code: {} Base Distance: {} Offset: {} Bits: {}", code, base_distance, distance_offset, num_distance_extra_bits);
+		let distance = base_distance + distance_offset;
+		distance as usize
+	}
+
+	fn read_repeat_length(value: usize, input_stream: &mut BitStream) -> usize {
+		let num_length_extra_bits = match value {
+			257 ... 264 => 0,
+			265 ... 284 => (value - 265) / 4 + 1,
+			285 => 0,
+			_ => panic!("Unsupported value for length: {}", value),
+		};
+		let length_offset = input_stream.next_bits(num_length_extra_bits) as usize;
+		let base_length = match value {
+			257 ... 264 => value - 254,
+			265 ... 268 => 11 + 2 * (value - 265),
+			269 ... 272 => 19 + 4 * (value - 269),
+			273 ... 276 => 35 + 8 * (value - 273),
+			277 ... 280 => 67 + 16 * (value - 277),
+			281 ... 284 => 131 + 32 * (value - 281),
+			285 => 258,
+			_ => panic!("Unsupported value for length: {}", value),
+		};
+		println!("Base Length: {} Offset: {} Bits: {}", base_length, length_offset, num_length_extra_bits);
+		let length = base_length + length_offset;
+		return length
 	}
 
 	type CodeLengthHuffman = super::huffman::Huffman<usize>;
