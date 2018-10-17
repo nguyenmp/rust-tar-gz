@@ -54,7 +54,7 @@ fn get_max_code_length(bit_lengths: &Vec<usize>) -> usize {
 	max
 }
 
-fn determine_starting_values(count_by_code_length: &Vec<usize>, max_code_length: usize) -> Vec<usize> {
+fn determine_starting_values(count_by_code_length: &Vec<usize>, _max_code_length: usize) -> Vec<usize> {
 	// We always start with an array of 0 because we start counting at length=1
 	let mut starting_values = Vec::new();
 	starting_values.push(0);
