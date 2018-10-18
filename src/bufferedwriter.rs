@@ -31,6 +31,7 @@ impl BufferedWriter {
 		let capacity = self.buffer.len();
 		let index = (capacity + self.cursor - distance) % capacity;
 		let byte = self.buffer[index];
+		println!("Byte at index {} is {}", index, byte);
 		self.write(byte);
 		byte
 	}

@@ -274,18 +274,26 @@ impl <'a> Source<Option<u8>> for DEFLATEReader<'a> {
 		match self.current_block.as_mut() {
 			Some(block) => match block.next(&mut self.bit_stream) {
 				DEFLATEResult::Literal(byte) => {
+					println!("Is Literal..");
 					self.buffered_writer.write(byte);
 					Some(byte)
 				},
 				DEFLATEResult::EndOfBlock => {
+					println!("Is EOB..");
 					self.current_block = None;
 					let byte = self.next();
-					if byte.is_some() {
-						self.buffered_writer.write(byte.unwrap());
-					}
+					println!("Continuing EOB");
+					// We probably don't need the following because
+					// the other branches handle writing already
+					// if byte.is_some() {
+					// 	self.buffered_writer.write(byte.unwrap());
+					// }
 					byte
 				},
-				DEFLATEResult::Repeat(distance) => Some(self.buffered_writer.repeat(distance)),
+				DEFLATEResult::Repeat(distance) => {
+					println!("Is Repeat..");
+					Some(self.buffered_writer.repeat(distance))
+				},
 			},
 			None => panic!("We should have assured not none above"),
 		}

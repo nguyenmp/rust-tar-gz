@@ -30,12 +30,13 @@ fn main() {
 		// 	None => panic!("Finished parsing"),
 		// }
 		bytes_written += 1;
-		if bytes_written == 326528 {
-			println!("Whaooooo");
-		}
+		// if bytes_written == 163229 {
+		// 	panic!("We've written enough");
+		// }
 		println!("aslkdjf : {}", bytes_written);
-		output.write(&vec![gzip.next()][..]);
-		// println!("Emission: {}", gzip.next());
+		let byte = gzip.next();
+		output.write(&vec![byte][..]);
+		println!("Emission: {}", byte);
 	}
 }
 
