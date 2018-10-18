@@ -243,12 +243,17 @@ impl <'a> DEFLATEReader<'a> {
 	}
 }
 
-impl <'a> Source<u8> for DEFLATEReader<'a> {
-	fn next(self: &mut DEFLATEReader<'a>) -> u8 {
+impl <'a> Source<Option<u8>> for DEFLATEReader<'a> {
+	fn next(self: &mut DEFLATEReader<'a>) -> Option<u8> {
 		// We set this field when we have finished with a block or haven't started yet
 		// this field tells us that we should begin reading a new block which involves
 		// decoding all the headers and huffman trees
 		if self.current_block.is_none() {
+			// We have already fully consumed the final block
+			if self.has_seen_final_block {
+				return None
+			}
+
 			// Is this the final block?
 			let b_final = self.bit_stream.next();
 			println!("b_final: {}", b_final);
@@ -270,15 +275,17 @@ impl <'a> Source<u8> for DEFLATEReader<'a> {
 			Some(block) => match block.next(&mut self.bit_stream) {
 				DEFLATEResult::Literal(byte) => {
 					self.buffered_writer.write(byte);
-					byte
+					Some(byte)
 				},
 				DEFLATEResult::EndOfBlock => {
 					self.current_block = None;
 					let byte = self.next();
-					self.buffered_writer.write(byte);
+					if byte.is_some() {
+						self.buffered_writer.write(byte.unwrap());
+					}
 					byte
 				},
-				DEFLATEResult::Repeat(distance) => self.buffered_writer.repeat(distance),
+				DEFLATEResult::Repeat(distance) => Some(self.buffered_writer.repeat(distance)),
 			},
 			None => panic!("We should have assured not none above"),
 		}

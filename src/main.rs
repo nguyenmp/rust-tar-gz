@@ -5,6 +5,7 @@ extern crate serde;
 extern crate serde_json;
 
 use std::fs::File;
+use std::io::Write;
 use std::io::Read;
 
 mod huffman;
@@ -13,19 +14,27 @@ mod bufferedwriter;
 mod deflate;
 
 fn main() {
-	let filename = "/Users/livingon/untitled/untitled/src.tar.gz";
+	let filename = "/Users/livingon/Desktop/tar_room/host.log.tar.gz";
 	let file = File::open(filename).expect("file not found");
+	let mut output = File::create("/Users/livingon/Desktop/tar_room/rust.tar").expect("Could not create output");
 	let mut read_source = ReadSource::new(file);
 	let mut gzip = GZipReader::new(&mut read_source);
 	let mut tar = TarReader {
 		input: &mut gzip,
 	};
 
+	let mut bytes_written : usize = 0;
 	loop {
-		match tar.next() {
-			Some(entry) => println!("Created {:?}", entry),
-			None => panic!("Finished parsing"),
+		// match tar.next() {
+		// 	Some(entry) => println!("Created {:?}", entry),
+		// 	None => panic!("Finished parsing"),
+		// }
+		bytes_written += 1;
+		if bytes_written == 326528 {
+			println!("Whaooooo");
 		}
+		println!("aslkdjf : {}", bytes_written);
+		output.write(&vec![gzip.next()][..]);
 		// println!("Emission: {}", gzip.next());
 	}
 }
@@ -129,7 +138,10 @@ impl <'a> GZipReader<'a> {
 /// bytes for the DEFLATEReader to consume
 impl <'a> Source<u8> for GZipReader<'a> {
 	fn next(&mut self) -> u8 {
-		self.deflater.next()
+		match self.deflater.next() {
+			Some(byte) => byte,
+			None => unimplemented!(),
+		}
 	}
 }
 
