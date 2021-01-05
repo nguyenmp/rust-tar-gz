@@ -4,6 +4,7 @@ extern crate serde_derive;
 extern crate serde;
 extern crate serde_json;
 
+use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::io::Read;
@@ -14,9 +15,13 @@ mod bufferedwriter;
 mod deflate;
 
 fn main() {
-	let filename = "/Users/livingon/Desktop/tar_room/host.log.tar.gz";
-	let file = File::open(filename).expect("file not found");
-	let mut output = File::create("/Users/livingon/Desktop/tar_room/rust.tar").expect("Could not create output");
+	let args: Vec<String> = env::args().collect();
+	let input_filename = &args[1];
+	let output_filename = &args[2];
+	println!("Input : {}", input_filename);
+	println!("Output : {}", output_filename);
+	let file = File::open(input_filename).expect("file not found");
+	let mut output = File::create(output_filename).expect("Could not create output");
 	let mut read_source = ReadSource::new(file);
 	let mut gzip = GZipReader::new(&mut read_source);
 	let mut tar = TarReader {
